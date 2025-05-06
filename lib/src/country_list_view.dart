@@ -83,47 +83,81 @@ class _CountryListViewState extends State<CountryListView> {
   late TextEditingController _searchController;
   late bool _searchAutofocus;
   bool _isSearching = false;
+  bool _dependenciesInitialized = false; // Flag to run didChangeDependencies logic once
 
   @override
   void initState() {
     super.initState();
     _searchController = TextEditingController();
+    _searchAutofocus = widget.searchAutofocus;
 
-    _countryList = _countryService.getAll();
-    if (widget.countryComparator != null) {
-      _countryList.sort(widget.countryComparator!);
+    // Initial load of countries (without localized names yet)
+    _countryList = countryCodes.map((countryData) => Country.from(json: countryData)).toList();
+    _filteredList = []; // Initialize to avoid late errors before didChangeDependencies
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    if (!_dependenciesInitialized) {
+      // Initialize localized names for all countries in the main list
+      for (final country in _countryList) {
+        country.initLocalizedName(context);
+      }
+
+      // Initialize localized name for the static 'World Wide' instance if shown
+      if (widget.showWorldWide) {
+        Country.initWorldWideLocalizedName(context);
+      }
+
+      // Sort the main list if a comparator is provided
+      // This is done after nameLocalized is initialized
+      if (widget.countryComparator != null) {
+        _countryList.sort(widget.countryComparator);
+      }
+
+      if (!widget.showPhoneCode) {
+        final ids = _countryList.map((e) => e.countryCode).toSet();
+        _countryList.retainWhere((country) => ids.remove(country.countryCode));
+      }
+
+      if (widget.exclude != null) {
+        _countryList.removeWhere(
+          (element) => widget.exclude!.contains(element.countryCode),
+        );
+      }
+
+      if (widget.countryFilter != null) {
+        _countryList.removeWhere(
+          (element) => !widget.countryFilter!.contains(element.countryCode),
+        );
+      }
+
+      // Initialize favorites list and their localized names
+      if (widget.favorite != null && widget.favorite!.isNotEmpty) {
+        // Assuming _countryService.findCountriesByCode fetches fresh instances
+        // or instances that might not have initLocalizedName called.
+        final List<Country> tempFavoriteList = _countryService.findCountriesByCode(widget.favorite!);
+        for (final favCountry in tempFavoriteList) {
+          favCountry.initLocalizedName(context); // Ensure localized name is set
+        }
+        _favoriteList = tempFavoriteList;
+      }
+
+      // Build the initial _filteredList
+      _rebuildFilteredList();
+
+      _dependenciesInitialized = true;
     }
-    _countryList = countryCodes.map((country) => Country.from(json: country)).toList();
+  }
 
-    //Remove duplicates country if not use phone code
-    if (!widget.showPhoneCode) {
-      final ids = _countryList.map((e) => e.countryCode).toSet();
-      _countryList.retainWhere((country) => ids.remove(country.countryCode));
-    }
-
-    if (widget.favorite != null) {
-      _favoriteList = _countryService.findCountriesByCode(widget.favorite!);
-    }
-
-    if (widget.exclude != null) {
-      _countryList.removeWhere(
-        (element) => widget.exclude!.contains(element.countryCode),
-      );
-    }
-
-    if (widget.countryFilter != null) {
-      _countryList.removeWhere(
-        (element) => !widget.countryFilter!.contains(element.countryCode),
-      );
-    }
-
-    _filteredList = <Country>[];
+  void _rebuildFilteredList() {
+    _filteredList.clear();
     if (widget.showWorldWide) {
       _filteredList.add(Country.worldWide);
     }
     _filteredList.addAll(_countryList);
-
-    _searchAutofocus = widget.searchAutofocus;
   }
 
   @override
@@ -175,8 +209,8 @@ class _CountryListViewState extends State<CountryListView> {
         Expanded(
           child: ListView(
             children: [
-              if (_favoriteList != null && !_isSearching) ...[
-                ..._favoriteList!.map<Widget>((currency) => _listRow(currency)),
+              if (_favoriteList != null && _favoriteList!.isNotEmpty && !_isSearching) ...[
+                ..._favoriteList!.map<Widget>((country) => _listRow(country)),
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 20.0),
                   child: Divider(thickness: 1),
@@ -201,7 +235,6 @@ class _CountryListViewState extends State<CountryListView> {
       color: Colors.transparent,
       child: InkWell(
         onTap: () {
-          country.nameLocalized = CountryLocalizations.of(context)?.countryName(countryCode: country.countryCode)?.replaceAll(RegExp(r"\s+"), " ");
           widget.onSelect(country);
           Navigator.pop(context);
         },
@@ -229,7 +262,7 @@ class _CountryListViewState extends State<CountryListView> {
               ),
               Expanded(
                 child: Text(
-                  CountryLocalizations.of(context)?.countryName(countryCode: country.countryCode)?.replaceAll(RegExp(r"\s+"), " ") ?? country.name,
+                  country.nameLocalized, // Use the pre-initialized localized name
                   style: _textStyle,
                 ),
               ),
